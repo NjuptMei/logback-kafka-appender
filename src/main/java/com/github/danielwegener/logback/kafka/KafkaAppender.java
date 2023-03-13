@@ -32,6 +32,7 @@ public class KafkaAppender<E> extends KafkaAppenderConfig<E> {
     private final FailedDeliveryCallback<E> failedDeliveryCallback = new FailedDeliveryCallback<E>() {
         @Override
         public void onFailedDelivery(E evt, Throwable throwable) {
+            // kafka，producer发送失败回调函数
             aai.appendLoopOnAppenders(evt);
         }
     };
@@ -44,7 +45,9 @@ public class KafkaAppender<E> extends KafkaAppenderConfig<E> {
 
     @Override
     public void doAppend(E e) {
+        // 如果当前并发队列queue不为空，此时将队列中元素取出后调用父类doAppend方法执行添加
         ensureDeferredAppends();
+        // 如果该日志是kafka发送过来的，将此数据推送到并发队列中
         if (e instanceof ILoggingEvent && ((ILoggingEvent)e).getLoggerName().startsWith(KAFKA_LOGGER_PREFIX)) {
             deferAppend(e);
         } else {
@@ -52,10 +55,15 @@ public class KafkaAppender<E> extends KafkaAppenderConfig<E> {
         }
     }
 
+    /**
+     * 这里实现的是LifeCycle接口，会在bean对象加载时按照指定scope执行对应的动作。start：容器启动完成时调用该方法
+     */
     @Override
     public void start() {
         // only error free appenders should be activated
-        if (!checkPrerequisites()) return;
+        if (!checkPrerequisites()) {
+            return;
+        }
 
         if (partition != null && partition < 0) {
             partition = null;
@@ -116,11 +124,12 @@ public class KafkaAppender<E> extends KafkaAppenderConfig<E> {
 
     @Override
     protected void append(E e) {
+        // 这里producer采用byte作为key、value解析器
         final byte[] payload = encoder.encode(e);
         final byte[] key = keyingStrategy.createKey(e);
 
         final Long timestamp = isAppendTimestamp() ? getTimestamp(e) : null;
-
+        // ProducerRecord为发送给kafka broker的键值对，可以不指定partition进行发送
         final ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(topic, partition, timestamp, key, payload);
 
         final Producer<byte[], byte[]> producer = lazyProducer.get();
@@ -168,6 +177,7 @@ public class KafkaAppender<E> extends KafkaAppenderConfig<E> {
         public Producer<byte[], byte[]> get() {
             Producer<byte[], byte[]> result = this.producer;
             if (result == null) {
+                // 以当前对象为粒度进行加锁处理
                 synchronized(this) {
                     result = this.producer;
                     if(result == null) {
@@ -182,6 +192,7 @@ public class KafkaAppender<E> extends KafkaAppenderConfig<E> {
         protected Producer<byte[], byte[]> initialize() {
             Producer<byte[], byte[]> producer = null;
             try {
+                // 创建自定义的KafkaProducer对象，这里仅仅是封装了发送者的key、value为byte[]型数据
                 producer = createProducer();
             } catch (Exception e) {
                 addError("error creating producer", e);
